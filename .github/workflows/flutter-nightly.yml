@@ -6,6 +6,11 @@ on:
   #   - cron: "0 0 * * *"
   workflow_dispatch:
 
+# --- Añade esta sección aquí ---
+  permissions:
+    contents: write # Esto otorga permisos de escritura al GITHUB_TOKEN para todo el workflow
+  # -----------------------------
+
 jobs:
   run-flutter-nightly-build:
     uses: ./.github/workflows/flutter-build.yml

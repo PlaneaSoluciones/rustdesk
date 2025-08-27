@@ -49,7 +49,7 @@ jobs:
         run: cargo build --release
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ runner.os }}-rustdesk-client
           path: |
@@ -63,7 +63,7 @@ jobs:
     if: github.ref_name == 'master'
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: Get artifact paths
         id: get_paths

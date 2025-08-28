@@ -1,87 +1,98 @@
-name: Build and Release RustDesk Desktop Clients
+# This yaml shares the build bridge steps with ci and nightly.
+name: Build flutter-rust-bridge
+# 2023-11-23 18:00:00+00:00
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+  workflow_call:
+
+env:
+  CARGO_EXPAND_VERSION: "1.0.95"
+  FLUTTER_VERSION: "3.22.3"
+  FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
+  RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+  generate_bridge:
+    runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-22.04, macos-12]
-
+        job:
+          - {
+              target: x86_64-unknown-linux-gnu,
+              os: ubuntu-22.04,
+              extra-build-args: "",
+            }
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout source code
+        uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
 
-      - name: Configure Rust toolchain
-        uses: actions-rs/toolchain@v1
+      - name: Install prerequisites
+        run: |
+          sudo apt-get install ca-certificates -y
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            curl \
+            gcc \
+            git \
+            g++ \
+            libclang-dev \
+            libgtk-3-dev \
+            llvm-dev \
+            nasm \
+            ninja-build \
+            pkg-config \
+            wget
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
-          target: x86_64-pc-windows-gnu
-          override: true
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.job.target }}
+          components: "rustfmt"
 
-      - name: Cache dependencies
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: bridge-${{ matrix.job.os }}
+
+      - name: Cache Bridge
+        id: cache-bridge
         uses: actions/cache@v3
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          path: /tmp/flutter_rust_bridge
+          key: vcpkg-${{ matrix.job.arch }}
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev libgstreamer1.0-dev
-
-      - name: Set RustDesk environment variables
-        run: |
-          echo "RUSTDESK_RENDEZVOUS_SERVER=${{ secrets.RUSTDESK_RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
-          echo "RUSTDESK_PUBLIC_KEY=${{ secrets.RUSTDESK_PUBLIC_KEY }}" >> $GITHUB_ENV
-
-      - name: Build RustDesk
-        run: cargo build --release
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Install flutter
+        uses: subosito/flutter-action@v2
         with:
-          name: ${{ runner.os }}-rustdesk-client
-          path: |
-            target/release/rustdesk.exe
-            target/release/rustdesk
-            target/release/rustdesk.app
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
 
-  create-release:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref_name == 'master'
-    steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Get artifact paths
-        id: get_paths
+      - name: Install flutter rust bridge deps
+        shell: bash
         run: |
-          echo "windows_path=windows-2022-rustdesk-client/rustdesk.exe" >> $GITHUB_OUTPUT
-          echo "ubuntu_path=ubuntu-22.04-rustdesk-client/rustdesk" >> $GITHUB_OUTPUT
-          echo "macos_path=macos-12-rustdesk-client/rustdesk.app" >> $GITHUB_OUTPUT
+          cargo install cargo-expand --version ${{ env.CARGO_EXPAND_VERSION }} --locked
+          cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
+          pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Run flutter rust bridge
+        run: |
+          ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+          cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@master
         with:
-          files: |
-            ${{ steps.get_paths.outputs.windows_path }}
-            ${{ steps.get_paths.outputs.ubuntu_path }}
-            ${{ steps.get_paths.outputs.macos_path }}
-          name: RustDesk ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: bridge-artifact
+          path: |
+            ./src/bridge_generated.rs
+            ./src/bridge_generated.io.rs
+            ./flutter/lib/generated_bridge.dart
+            ./flutter/lib/generated_bridge.freezed.dart
+            ./flutter/macos/Runner/bridge_generated.h
+            ./flutter/ios/Runner/bridge_generated.h

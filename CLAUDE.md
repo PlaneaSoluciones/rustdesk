@@ -9,19 +9,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `python3 build.py --flutter` - Build Flutter version (desktop)
 - `python3 build.py --flutter --release` - Build Flutter version in release mode
 - `python3 build.py --hwcodec` - Build with hardware codec support
-- `python3 build.py --vram` - Build with VRAM feature (Windows only)
 - `cargo build --release` - Build Rust binary in release mode
 - `cargo build --features hwcodec` - Build with specific features
 
-### Flutter Mobile Commands
-- `cd flutter && flutter build android` - Build Android APK
-- `cd flutter && flutter build ios` - Build iOS app
-- `cd flutter && flutter run` - Run Flutter app in development mode
+### Testing
+- `cargo test` - Run all Rust tests
+- `cargo test <test_name>` - Run a single Rust test by name
 - `cd flutter && flutter test` - Run Flutter tests
 
-### Testing
-- `cargo test` - Run Rust tests
-- `cd flutter && flutter test` - Run Flutter tests
+### Flutter-Rust Bridge Code Generation
+The bridge between Flutter and Rust is auto-generated. After changing `src/flutter_ffi.rs`, regenerate:
+```sh
+flutter_rust_bridge_codegen \
+  --rust-input ./src/flutter_ffi.rs \
+  --dart-output ./flutter/lib/generated_bridge.dart \
+  --c-output ./flutter/macos/Runner/bridge_generated.h
+cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
+```
+Required tool versions: `flutter_rust_bridge_codegen` 1.80.1, `cargo-expand` 1.0.95.
+
+**Do not edit these generated files manually:**
+- `src/bridge_generated.rs` / `src/bridge_generated.io.rs`
+- `flutter/lib/generated_bridge.dart` / `flutter/lib/generated_bridge.freezed.dart`
+- `flutter/macos/Runner/bridge_generated.h` / `flutter/ios/Runner/bridge_generated.h`
 
 ### Platform-Specific Build Scripts
 - `flutter/build_android.sh` - Android build script
@@ -30,62 +40,64 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Architecture
 
-### Directory Structure
-- **`src/`** - Main Rust application code
-  - `src/ui/` - Legacy Sciter UI (deprecated, use Flutter instead)
-  - `src/server/` - Audio/clipboard/input/video services and network connections
-  - `src/client.rs` - Peer connection handling
-  - `src/platform/` - Platform-specific code
-- **`flutter/`** - Flutter UI code for desktop and mobile
-- **`libs/`** - Core libraries
-  - `libs/hbb_common/` - Video codec, config, network wrapper, protobuf, file transfer utilities
-  - `libs/scrap/` - Screen capture functionality
-  - `libs/enigo/` - Platform-specific keyboard/mouse control
-  - `libs/clipboard/` - Cross-platform clipboard implementation
+### Toolchain Requirements
+- Minimum Rust version: **1.75** (see `rust-version` in `Cargo.toml`)
+- Flutter version: **3.22.3** (used in CI)
+- vcpkg dependencies: `libvpx`, `libyuv`, `opus`, `aom` — set `VCPKG_ROOT`
 
-### Key Components
-- **Remote Desktop Protocol**: Custom protocol implemented in `src/rendezvous_mediator.rs` for communicating with rustdesk-server
-- **Screen Capture**: Platform-specific screen capture in `libs/scrap/`
-- **Input Handling**: Cross-platform input simulation in `libs/enigo/`
-- **Audio/Video Services**: Real-time audio/video streaming in `src/server/`
-- **File Transfer**: Secure file transfer implementation in `libs/hbb_common/`
+### Communication Architecture
 
-### UI Architecture
-- **Legacy UI**: Sciter-based (deprecated) - files in `src/ui/`
-- **Modern UI**: Flutter-based - files in `flutter/`
-  - Desktop: `flutter/lib/desktop/`
-  - Mobile: `flutter/lib/mobile/`
-  - Shared: `flutter/lib/common/` and `flutter/lib/models/`
+```
+Flutter UI (Dart)
+    ↕  flutter_rust_bridge FFI (sync/async calls via generated_bridge.dart)
+Rust library (librustdesk)
+    ↕  IPC socket (parity-tokio-ipc named pipe)
+Rust service (background daemon)
+    ↕  Network (TCP/UDP, protobuf)
+rustdesk-server (rendezvous + relay)
+```
 
-## Important Build Notes
+- **FFI layer**: `src/flutter_ffi.rs` exposes functions to Dart. Dart calls them via `flutter/lib/generated_bridge.dart`.
+- **IPC layer**: `src/ipc.rs` — Flutter app communicates with the background service process via named pipe/unix socket. The service runs separately from the UI process.
+- **Network layer**: `src/rendezvous_mediator.rs` handles peer discovery and relay via rustdesk-server. Direct connections use TCP/KCP; relay uses the server.
+- **Session layer**: `src/client.rs` manages outbound peer connections; `src/server/connection.rs` manages inbound.
 
-### Dependencies
-- Requires vcpkg for C++ dependencies: `libvpx`, `libyuv`, `opus`, `aom`
-- Set `VCPKG_ROOT` environment variable
-- Download appropriate Sciter library for legacy UI support
+### Key Source Files
+- `src/flutter_ffi.rs` - All Rust functions callable from Flutter (FFI boundary)
+- `src/ui_interface.rs` / `src/ui_session_interface.rs` - UI-facing abstractions
+- `src/server/` - Per-service implementations: `video_service.rs`, `audio_service.rs`, `input_service.rs`, `display_service.rs`, `clipboard_service.rs`
+- `src/client/` - Client-side session handling and file transfer
+- `libs/scrap/` - Screen capture (platform-specific)
+- `libs/enigo/` - Keyboard/mouse injection (platform-specific)
+- `libs/hbb_common/` - Shared types: protobuf definitions, config, network utilities
 
-### Ignore Patterns
-When working with files, ignore these directories:
-- `target/` - Rust build artifacts
-- `flutter/build/` - Flutter build output
-- `flutter/.dart_tool/` - Flutter tooling files
+### Config System
+All config lives in `libs/hbb_common/src/config.rs`, four config types:
+- `Config` (Settings) - global settings
+- `LocalConfig` - per-machine settings
+- `PeerConfig` - per-peer settings
+- Built-in defaults
 
-### Cross-Platform Considerations
-- Windows builds require additional DLLs and virtual display drivers
-- macOS builds need proper signing and notarization for distribution
-- Linux builds support multiple package formats (deb, rpm, AppImage)
-- Mobile builds require platform-specific toolchains (Android SDK, Xcode)
+### Flutter UI Structure
+- `flutter/lib/desktop/` - Desktop-specific screens and widgets
+- `flutter/lib/mobile/` - Mobile-specific screens
+- `flutter/lib/common/` - Shared widgets and utilities
+- `flutter/lib/models/` - State models (GetX-based): `model.dart` is the main session model, `server_model.dart` for the controlled-side panel
 
 ### Feature Flags
 - `hwcodec` - Hardware video encoding/decoding
 - `vram` - VRAM optimization (Windows only)
-- `flutter` - Enable Flutter UI
+- `flutter` - Enable Flutter UI (required for Flutter builds)
 - `unix-file-copy-paste` - Unix file clipboard support
-- `screencapturekit` - macOS ScreenCaptureKit (macOS only)
+- `screencapturekit` - macOS ScreenCaptureKit
 
-### Config
-All configurations or options are under `libs/hbb_common/src/config.rs` file, 4 types:
-- Settings
-- Local
-- Display
-- Built-in
+### Ignore Patterns
+- `target/` - Rust build artifacts
+- `flutter/build/` - Flutter build output
+- `flutter/.dart_tool/` - Flutter tooling files
+
+### Cross-Platform Notes
+- Windows: requires additional DLLs and virtual display drivers; `vram` feature available
+- macOS: requires signing/notarization for distribution; use `screencapturekit` feature
+- Linux: supports deb, rpm, AppImage; Wayland support via `scrap/wayland`
+- Android/iOS: many desktop-only modules are `cfg`-gated with `#[cfg(not(any(target_os = "android", target_os = "ios")))]`

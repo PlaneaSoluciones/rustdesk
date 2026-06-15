@@ -1,1 +1,7 @@
 * text=auto
+
+# Proteger customizaciones ante merges desde upstream rustdesk/rustdesk
+# Requiere una vez por máquina: git config merge.ours.driver true
+.github/workflows/* merge=ours
+.gitattributes merge=ours
+CLAUDE.md merge=ours

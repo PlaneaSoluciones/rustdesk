@@ -1,0 +1,27 @@
+name: Build Android / Linux (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_android:
+        description: 'Build Android (arm64, armv7, x86_64)'
+        type: boolean
+        default: true
+      build_linux:
+        description: 'Build Linux x86_64 + aarch64'
+        type: boolean
+        default: false
+      upload_tag:
+        description: 'Tag de la release donde publicar (ej: v1.4.1)'
+        type: string
+        required: true
+
+jobs:
+  run-build:
+    uses: ./.github/workflows/flutter-build.yml
+    secrets: inherit
+    with:
+      upload-artifact: true
+      upload-tag: ${{ inputs.upload_tag }}
+      build_linux: ${{ inputs.build_linux }}
+      build_android: ${{ inputs.build_android }}

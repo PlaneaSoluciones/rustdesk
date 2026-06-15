@@ -101,3 +101,33 @@ All config lives in `libs/hbb_common/src/config.rs`, four config types:
 - macOS: requires signing/notarization for distribution; use `screencapturekit` feature
 - Linux: supports deb, rpm, AppImage; Wayland support via `scrap/wayland`
 - Android/iOS: many desktop-only modules are `cfg`-gated with `#[cfg(not(any(target_os = "android", target_os = "ios")))]`
+
+## Releases y servidor propio
+
+### Flujo de release
+
+1. `git tag vX.Y.Z && git push --tags` → lanza automáticamente Win + macOS (~60-70 min)
+2. Cuando termine, ir a **GitHub Actions → "Build Android / Linux (manual)"** y lanzarlo con:
+   - `upload_tag`: el mismo `vX.Y.Z`
+   - `build_android: true` (siempre)
+   - `build_linux: true` (si se necesita esa release)
+
+### Secrets de GitHub (Settings → Secrets and variables → Actions)
+
+| Secret | Descripción |
+|--------|-------------|
+| `RENDEZVOUS_SERVER` | Hostname:puerto del servidor (ej: `servidor.planea.com.es:21116`) |
+| `RS_PUB_KEY` | Contenido de `id_ed25519.pub` del rustdesk-server |
+| `API_SERVER` | URL del API server (ej: `https://servidor.planea.com.es`) |
+
+Estos valores se incrustan en el binario en tiempo de compilación vía `option_env!()` en `src/common.rs`. Sin ellos, el cliente apunta al servidor público de RustDesk.
+
+### Sincronización con upstream
+
+Los ficheros de `.github/workflows/`, `CLAUDE.md` y `.gitattributes` están protegidos ante merges upstream. Requiere configurar una vez por máquina:
+
+```bash
+git config merge.ours.driver true
+```
+
+Para incorporar cambios de upstream, usar siempre `git merge` (no rebase) y cherry-pick commits específicos en lugar de merges completos.

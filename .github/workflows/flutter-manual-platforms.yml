@@ -16,6 +16,9 @@ on:
         type: string
         required: true
 
+permissions:
+  contents: write
+
 jobs:
   run-build:
     uses: ./.github/workflows/flutter-build.yml
